@@ -1,10 +1,11 @@
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
-// HUD elements
+// HUD
 const lvlEl = document.getElementById("lvl");
 const aliveEl = document.getElementById("alive");
 const totalEl = document.getElementById("total");
+const goalEl = document.getElementById("goal");
 const killedEl = document.getElementById("killed");
 const escapedEl = document.getElementById("escaped");
 const comboEl = document.getElementById("combo");
@@ -12,17 +13,24 @@ const scoreEl = document.getElementById("score");
 const spdEl = document.getElementById("spd");
 const levelBar = document.getElementById("levelBar");
 
-// UI buttons
+// Buttons
 const btnStart = document.getElementById("btnStart");
 const btnPause = document.getElementById("btnPause");
 const btnRestart = document.getElementById("btnRestart");
 const btnMute = document.getElementById("btnMute");
 
-// Overlay
+// Power-ups
+const puSlow = document.getElementById("puSlow");
+const puFreeze = document.getElementById("puFreeze");
+const puDouble = document.getElementById("puDouble");
+
+// Overlay options
 const overlay = document.getElementById("overlay");
 const overlayClose = document.getElementById("overlayClose");
+const difficultySel = document.getElementById("difficulty");
+const volumeSlider = document.getElementById("volume");
 
-// Canvas sizing
+// Resize
 function resizeCanvas() {
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
@@ -51,36 +59,56 @@ const SHRINK_SPEED = 0.22;
 
 const GRID_SIZE = 32;
 
-// Pop particles
+// POP
 const POP_PARTICLES_MIN = 18;
 const POP_PARTICLES_MAX = 28;
 const POP_GRAVITY = 0.04;
 
-// “Juice”
-const COLLISION_FLASH_FRAMES = 10;
-const SCREEN_SHAKE_POWER = 2.6;
-// ===================
+// Combo
+const COMBO_WINDOW_MS = 900;
 
-// ===== Audio (WebAudio, sin archivos) =====
+// Power-ups duration (ms)
+const SLOW_MS = 3500;
+const FREEZE_MS = 1600;
+const DOUBLE_MS = 4500;
+// ==================
+
+// ===== Audio (louder) =====
 let audioCtx = null;
 let masterGain = null;
+let musicGain = null;
 let isMuted = false;
+let musicNodes = [];
+let musicOn = false;
 
 function initAudio() {
   if (audioCtx) return;
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
   masterGain = audioCtx.createGain();
-  masterGain.gain.value = 0.18; // volumen general
+  // MÁS ALTO por defecto (usuario pidió)
+  masterGain.gain.value = 0.50;
   masterGain.connect(audioCtx.destination);
+
+  musicGain = audioCtx.createGain();
+  musicGain.gain.value = 0.10;
+  musicGain.connect(masterGain);
+}
+
+function setVolumeFromUI() {
+  if (!masterGain) return;
+  const v = Number(volumeSlider.value) / 100; // 0..1
+  // volumen fuerte: base 0.05 a 0.90
+  masterGain.gain.value = isMuted ? 0 : (0.05 + v * 0.85);
 }
 
 function setMuted(m) {
   isMuted = m;
-  if (masterGain) masterGain.gain.value = isMuted ? 0 : 0.18;
+  setVolumeFromUI();
   btnMute.textContent = isMuted ? "🔇 Mute" : "🔊 Sonido";
 }
 
-function beep({ freq = 440, dur = 0.08, type = "sine", gain = 0.35, slideTo = null } = {}) {
+function beep({ freq=440, dur=0.08, type="sine", gain=0.35, slideTo=null }={}) {
   if (!audioCtx || isMuted) return;
   const t0 = audioCtx.currentTime;
 
@@ -89,9 +117,7 @@ function beep({ freq = 440, dur = 0.08, type = "sine", gain = 0.35, slideTo = nu
   o.type = type;
   o.frequency.setValueAtTime(freq, t0);
 
-  if (slideTo != null) {
-    o.frequency.exponentialRampToValueAtTime(Math.max(40, slideTo), t0 + dur);
-  }
+  if (slideTo != null) o.frequency.exponentialRampToValueAtTime(Math.max(40, slideTo), t0 + dur);
 
   g.gain.setValueAtTime(0.0001, t0);
   g.gain.exponentialRampToValueAtTime(gain, t0 + 0.01);
@@ -104,60 +130,123 @@ function beep({ freq = 440, dur = 0.08, type = "sine", gain = 0.35, slideTo = nu
   o.stop(t0 + dur);
 }
 
-function popSound() {
-  // pop corto y brillante
-  beep({ freq: 520, slideTo: 180, dur: 0.10, type: "triangle", gain: 0.42 });
-  beep({ freq: 880, slideTo: 320, dur: 0.07, type: "sine", gain: 0.22 });
+function popSound(){ beep({freq:520, slideTo:180, dur:0.10, type:"triangle", gain:0.65}); beep({freq:880, slideTo:320, dur:0.07, type:"sine", gain:0.35}); }
+function hitSound(){ beep({freq:220, slideTo:160, dur:0.06, type:"square", gain:0.18}); }
+function levelUpSound(){ beep({freq:440, slideTo:660, dur:0.12, type:"sine", gain:0.28}); beep({freq:660, slideTo:880, dur:0.12, type:"sine", gain:0.28}); }
+
+// Música generada (simple)
+function startMusic() {
+  if (!audioCtx || isMuted || musicOn) return;
+  musicOn = true;
+
+  // 2 osciladores suaves + filtro
+  const filt = audioCtx.createBiquadFilter();
+  filt.type = "lowpass";
+  filt.frequency.value = 900;
+
+  const o1 = audioCtx.createOscillator();
+  const o2 = audioCtx.createOscillator();
+  o1.type = "sine";
+  o2.type = "triangle";
+
+  const g1 = audioCtx.createGain();
+  const g2 = audioCtx.createGain();
+  g1.gain.value = 0.10;
+  g2.gain.value = 0.06;
+
+  // Acordes sencillos (loop por tiempo)
+  const notes = [220, 277.18, 329.63, 392.00, 329.63, 277.18]; // vibe
+  let idx = 0;
+
+  function stepChord() {
+    if (!musicOn) return;
+    const t = audioCtx.currentTime;
+    const n = notes[idx % notes.length];
+    o1.frequency.setValueAtTime(n, t);
+    o2.frequency.setValueAtTime(n * 2, t);
+    idx++;
+    setTimeout(stepChord, 450);
+  }
+
+  o1.connect(g1);
+  o2.connect(g2);
+  g1.connect(filt);
+  g2.connect(filt);
+  filt.connect(musicGain);
+
+  o1.start();
+  o2.start();
+  stepChord();
+
+  musicNodes = [o1, o2, g1, g2, filt];
 }
-function hitSound() {
-  // “toc” de colisión suave
-  beep({ freq: 220, slideTo: 160, dur: 0.06, type: "square", gain: 0.10 });
+
+function stopMusic() {
+  musicOn = false;
+  try {
+    for (const n of musicNodes) {
+      if (n && typeof n.stop === "function") n.stop();
+    }
+  } catch {}
+  musicNodes = [];
 }
-function levelUpSound() {
-  beep({ freq: 440, slideTo: 660, dur: 0.12, type: "sine", gain: 0.22 });
-  beep({ freq: 660, slideTo: 880, dur: 0.12, type: "sine", gain: 0.22 });
-}
-// ===============================
+// =======================
 
 // Mouse
-let mouseX = -9999;
-let mouseY = -9999;
+let mouseX = -9999, mouseY = -9999;
 
 // Game state
 let level = 1;
 let circles = [];
 let particles = [];
-let rings = []; // ondas tipo pop
+let rings = [];
 let finished = false;
 let paused = true;
 
-// Stats per level + global
-let killedThisLevel = 0;
-let escapedThisLevel = 0;
-
-let totalKilled = 0;
-let totalEscaped = 0;
+// Stats
+let killedThisLevel = 0, escapedThisLevel = 0;
+let totalKilled = 0, totalEscaped = 0;
 let perLevelKilled = Array(MAX_LEVELS).fill(0);
 let perLevelEscaped = Array(MAX_LEVELS).fill(0);
 
+// Score & combo
 let score = 0;
 let combo = 1;
-let lastKillTime = 0; // para combo
-const COMBO_WINDOW_MS = 900;
+let lastKillTime = 0;
 
-let shakeFrames = 0;
-let shakeX = 0;
-let shakeY = 0;
+// Difficulty + Goal
+let difficulty = "normal";
+let goalMin = 7; // por defecto normal
 
+// Power-ups
+let slowUntil = 0;
+let freezeUntil = 0;
+let doubleUntil = 0;
+
+// Time
 const startTime = performance.now();
 
 // Utils
-function rand(min, max) { return Math.random() * (max - min) + min; }
-function randInt(min, max) { return Math.floor(rand(min, max + 1)); }
-function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+function rand(min,max){ return Math.random()*(max-min)+min; }
+function randInt(min,max){ return Math.floor(rand(min,max+1)); }
+function clamp(v,min,max){ return Math.max(min, Math.min(max,v)); }
+function distance(x1,y1,x2,y2){ const dx=x2-x1, dy=y2-y1; return Math.sqrt(dx*dx+dy*dy); }
 
 function levelSpeed() {
-  return BASE_SPEED + (level - 1) * SPEED_INCREASE;
+  let s = BASE_SPEED + (level - 1) * SPEED_INCREASE;
+
+  // dificultad altera velocidad base
+  if (difficulty === "easy") s *= 0.92;
+  if (difficulty === "hard") s *= 1.18;
+
+  // powerup slow
+  const now = performance.now();
+  if (now < slowUntil) s *= 0.55;
+
+  // freeze (0)
+  if (now < freezeUntil) s *= 0.0;
+
+  return s;
 }
 
 function randomColor() {
@@ -168,72 +257,47 @@ function randomColor() {
 function darkerStroke(color) {
   const m = color.match(/hsl\((\d+),\s*(\d+)%?,\s*(\d+)%?\)/i);
   if (!m) return "rgba(0,0,0,0.35)";
-  const h = Number(m[1]);
-  const s = Number(m[2]);
-  const l = Number(m[3]);
-  const newL = Math.max(18, l - 22);
-  return `hsl(${h}, ${s}%, ${newL}%)`;
+  const h = Number(m[1]), s = Number(m[2]), l = Number(m[3]);
+  return `hsl(${h}, ${s}%, ${Math.max(18, l - 22)}%)`;
 }
 
-function distance(x1, y1, x2, y2) {
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  return Math.sqrt(dx * dx + dy * dy);
-}
-
-// Grid background
+// Grid
 function drawGrid() {
-  const W = canvas.clientWidth;
-  const H = canvas.clientHeight;
-
+  const W = canvas.clientWidth, H = canvas.clientHeight;
   ctx.save();
   ctx.fillStyle = "#fff7c2";
   ctx.fillRect(0, 0, W, H);
-
   ctx.strokeStyle = "rgba(0,0,0,0.06)";
   ctx.lineWidth = 1;
-
-  for (let x = 0; x <= W; x += GRID_SIZE) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, H);
-    ctx.stroke();
-  }
-  for (let y = 0; y <= H; y += GRID_SIZE) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(W, y);
-    ctx.stroke();
-  }
-
+  for (let x=0; x<=W; x+=GRID_SIZE){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+  for (let y=0; y<=H; y+=GRID_SIZE){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
   ctx.restore();
 }
 
 // Particles & rings
 class Particle {
-  constructor(x, y, color) {
-    this.x = x; this.y = y;
-    this.vx = rand(-2.6, 2.6);
-    this.vy = rand(-3.8, -0.8);
-    this.size = rand(2, 5);
-    this.life = rand(18, 34);
-    this.alpha = 1;
-    this.color = color;
+  constructor(x,y,color){
+    this.x=x; this.y=y;
+    this.vx=rand(-2.6,2.6);
+    this.vy=rand(-3.8,-0.8);
+    this.size=rand(2,5);
+    this.life=rand(18,34);
+    this.alpha=1;
+    this.color=color;
   }
-  update() {
-    this.x += this.vx;
-    this.y += this.vy;
-    this.vy += POP_GRAVITY;
-    this.life -= 1;
-    this.alpha = clamp(this.life / 34, 0, 1);
+  update(){
+    this.x+=this.vx; this.y+=this.vy;
+    this.vy+=POP_GRAVITY;
+    this.life-=1;
+    this.alpha=clamp(this.life/34,0,1);
   }
-  draw() {
-    if (this.life <= 0) return;
+  draw(){
+    if(this.life<=0) return;
     ctx.save();
-    ctx.globalAlpha = this.alpha;
+    ctx.globalAlpha=this.alpha;
     ctx.beginPath();
-    ctx.fillStyle = this.color;
-    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+    ctx.fillStyle=this.color;
+    ctx.arc(this.x,this.y,this.size,0,Math.PI*2);
     ctx.fill();
     ctx.closePath();
     ctx.restore();
@@ -241,246 +305,209 @@ class Particle {
 }
 
 class Ring {
-  constructor(x, y, color) {
-    this.x = x; this.y = y;
-    this.r = 6;
-    this.life = 18;
-    this.color = color;
+  constructor(x,y,color){
+    this.x=x; this.y=y;
+    this.r=6;
+    this.life=18;
+    this.color=color;
   }
-  update() {
-    this.r += 6;
-    this.life -= 1;
-  }
-  draw() {
-    if (this.life <= 0) return;
+  update(){ this.r+=6; this.life-=1; }
+  draw(){
+    if(this.life<=0) return;
     ctx.save();
-    ctx.globalAlpha = clamp(this.life / 18, 0, 1);
+    ctx.globalAlpha=clamp(this.life/18,0,1);
     ctx.beginPath();
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = this.color;
-    ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+    ctx.lineWidth=3;
+    ctx.strokeStyle=this.color;
+    ctx.arc(this.x,this.y,this.r,0,Math.PI*2);
     ctx.stroke();
     ctx.closePath();
     ctx.restore();
   }
 }
 
-function spawnPop(x, y, baseColor) {
-  const n = randInt(POP_PARTICLES_MIN, POP_PARTICLES_MAX);
-  for (let i = 0; i < n; i++) particles.push(new Particle(x, y, baseColor));
-  for (let i = 0; i < Math.floor(n * 0.22); i++) particles.push(new Particle(x, y, "rgba(255,255,255,0.95)"));
-  rings.push(new Ring(x, y, "rgba(255,255,255,0.9)"));
+function spawnPop(x,y,color){
+  const n=randInt(POP_PARTICLES_MIN, POP_PARTICLES_MAX);
+  for(let i=0;i<n;i++) particles.push(new Particle(x,y,color));
+  for(let i=0;i<Math.floor(n*0.22);i++) particles.push(new Particle(x,y,"rgba(255,255,255,0.95)"));
+  rings.push(new Ring(x,y,"rgba(255,255,255,0.9)"));
 }
 
-// Circle class (agar style)
+// Circle
 class Circle {
-  constructor(id, x, y, radius, dx, dy, color) {
-    this.id = id;
-    this.radius = radius;
-    this.posX = x;
-    this.posY = y;
-
-    this.dx = dx;
-    this.dy = dy;
-    this.mass = radius * radius;
-
-    this.baseColor = color;
-    this.strokeColor = darkerStroke(color);
-
-    this.alpha = 1;
-    this.fading = false;
-    this.dead = false;
-
-    this.isHover = false;
-    this.flash = 0; // “juice” al colisionar
-    this.killedByClick = false;
+  constructor(id,x,y,r,dx,dy,color){
+    this.id=id;
+    this.radius=r;
+    this.posX=x; this.posY=y;
+    this.dx=dx; this.dy=dy;
+    this.mass=r*r;
+    this.baseColor=color;
+    this.strokeColor=darkerStroke(color);
+    this.alpha=1;
+    this.fading=false;
+    this.dead=false;
+    this.killedByClick=false;
+    this.isHover=false;
   }
 
-  isMouseOver(mx, my) {
-    return distance(mx, my, this.posX, this.posY) <= this.radius;
-  }
+  isMouseOver(mx,my){ return distance(mx,my,this.posX,this.posY) <= this.radius; }
 
-  setColor(newColor) {
-    this.baseColor = newColor;
-    this.strokeColor = darkerStroke(newColor);
-  }
+  setColor(c){ this.baseColor=c; this.strokeColor=darkerStroke(c); }
 
-  startFade() {
-    if (this.dead || this.fading) return;
-    this.fading = true;
-    this.killedByClick = true;
-    spawnPop(this.posX, this.posY, this.baseColor);
+  startFade(){
+    if(this.dead || this.fading) return;
+    this.fading=true;
+    this.killedByClick=true;
+    spawnPop(this.posX,this.posY,this.baseColor);
     popSound();
   }
 
-  step() {
-    if (this.dead) return;
+  step(){
+    if(this.dead) return;
 
     this.isHover = this.isMouseOver(mouseX, mouseY);
-    if (this.flash > 0) this.flash--;
 
+    // freeze / slow afecta velocidad
+    const spdFactor = levelSpeed() / (BASE_SPEED + (level - 1) * SPEED_INCREASE || 1);
     const W = canvas.clientWidth;
-    this.posX += this.dx;
-    this.posY += this.dy;
 
-    // bounce sides
-    if (this.posX + this.radius > W) {
-      this.posX = W - this.radius;
-      this.dx = -this.dx;
-    }
-    if (this.posX - this.radius < 0) {
-      this.posX = this.radius;
-      this.dx = -this.dx;
-    }
+    // movimiento
+    this.posX += this.dx * spdFactor;
+    this.posY += this.dy * spdFactor;
+
+    // rebote lateral
+    if(this.posX + this.radius > W){ this.posX=W-this.radius; this.dx=-this.dx; }
+    if(this.posX - this.radius < 0){ this.posX=this.radius; this.dx=-this.dx; }
 
     // fade + shrink
-    if (this.fading) {
+    if(this.fading){
       this.alpha -= FADE_SPEED;
       this.radius -= SHRINK_SPEED;
+      if(this.alpha<=0 || this.radius<=0){
+        this.alpha=0; this.radius=Math.max(0,this.radius);
+        this.dead=true;
 
-      if (this.alpha <= 0 || this.radius <= 0) {
-        this.alpha = 0;
-        this.radius = Math.max(0, this.radius);
-        this.dead = true;
-
-        // stats + combo + score
+        // stats
         killedThisLevel++;
         totalKilled++;
 
+        // combo
         const now = performance.now();
-        if (now - lastKillTime <= COMBO_WINDOW_MS) combo = Math.min(combo + 1, 9);
+        if(now - lastKillTime <= COMBO_WINDOW_MS) combo = Math.min(combo + 1, 9);
         else combo = 1;
         lastKillTime = now;
 
-        // score: base 100 + bonus por combo + por nivel
-        score += Math.round(100 * (1 + (combo - 1) * 0.25) * (1 + (level - 1) * 0.08));
-
-        updateHUD();
+        // score (x2 si powerup)
+        const mult = (performance.now() < doubleUntil) ? 2 : 1;
+        score += Math.round(mult * 100 * (1 + (combo - 1) * 0.25) * (1 + (level - 1) * 0.08));
       }
     }
 
-    // escape
-    if (!this.dead && (this.posY + this.radius < 0)) {
-      this.dead = true;
-      if (!this.killedByClick) {
+    // escape arriba
+    if(!this.dead && (this.posY + this.radius < 0)){
+      this.dead=true;
+      if(!this.killedByClick){
         escapedThisLevel++;
         totalEscaped++;
-        // penalización ligera
         score = Math.max(0, score - 35);
         combo = 1;
-        updateHUD();
       }
     }
   }
 
-  draw() {
-    if (this.dead) return;
+  draw(){
+    if(this.dead) return;
 
     ctx.save();
-    ctx.globalAlpha = clamp(this.alpha, 0, 1);
+    ctx.globalAlpha=clamp(this.alpha,0,1);
 
-    // shadow
-    ctx.shadowColor = "rgba(0,0,0,0.22)";
-    ctx.shadowBlur = this.isHover ? 18 : 12;
-    ctx.shadowOffsetY = 4;
+    ctx.shadowColor="rgba(0,0,0,0.22)";
+    ctx.shadowBlur=this.isHover ? 18 : 12;
+    ctx.shadowOffsetY=4;
 
     // body
     ctx.beginPath();
-    ctx.fillStyle = this.baseColor;
-    ctx.arc(this.posX, this.posY, this.radius, 0, Math.PI * 2);
+    ctx.fillStyle=this.baseColor;
+    ctx.arc(this.posX,this.posY,this.radius,0,Math.PI*2);
     ctx.fill();
 
-    // outline (flash brighten)
-    ctx.shadowBlur = 0;
-    ctx.lineWidth = 4;
-    ctx.strokeStyle = this.flash > 0 ? "rgba(255,255,255,0.9)" : this.strokeColor;
+    // outline
+    ctx.shadowBlur=0;
+    ctx.lineWidth=4;
+    ctx.strokeStyle=this.strokeColor;
     ctx.stroke();
     ctx.closePath();
 
     // highlight
     ctx.beginPath();
-    ctx.globalAlpha = clamp(this.alpha * (this.isHover ? 0.58 : 0.38), 0, 1);
-    ctx.fillStyle = "rgba(255,255,255,0.92)";
-    ctx.arc(
-      this.posX - this.radius * 0.35,
-      this.posY - this.radius * 0.35,
-      this.radius * 0.22,
-      0, Math.PI * 2
-    );
+    ctx.globalAlpha=clamp(this.alpha*(this.isHover ? 0.58 : 0.38),0,1);
+    ctx.fillStyle="rgba(255,255,255,0.92)";
+    ctx.arc(this.posX-this.radius*0.35, this.posY-this.radius*0.35, this.radius*0.22, 0, Math.PI*2);
     ctx.fill();
     ctx.closePath();
 
     // text
-    ctx.globalAlpha = clamp(this.alpha, 0, 1);
-    ctx.fillStyle = "rgba(15,23,42,0.92)";
-    ctx.font = `${Math.max(12, Math.floor(this.radius * 0.6))}px Arial`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
+    ctx.globalAlpha=clamp(this.alpha,0,1);
+    ctx.fillStyle="rgba(15,23,42,0.92)";
+    ctx.font=`${Math.max(12, Math.floor(this.radius*0.6))}px Arial`;
+    ctx.textAlign="center";
+    ctx.textBaseline="middle";
     ctx.fillText(String(this.id), this.posX, this.posY);
 
     ctx.restore();
   }
 }
 
-// Collision helpers
-function circlesCollide(a, b) {
-  const d = distance(a.posX, a.posY, b.posX, b.posY);
-  return d <= (a.radius + b.radius);
+// Collisions (no atraviesan)
+function circlesCollide(a,b){
+  return distance(a.posX,a.posY,b.posX,b.posY) <= (a.radius + b.radius);
 }
-
-function resolveElasticCollision(a, b) {
-  let nx = b.posX - a.posX;
-  let ny = b.posY - a.posY;
-
-  let dist = Math.sqrt(nx * nx + ny * ny) || 1;
-  nx /= dist;
-  ny /= dist;
+function resolveElasticCollision(a,b){
+  let nx=b.posX-a.posX, ny=b.posY-a.posY;
+  let dist=Math.sqrt(nx*nx+ny*ny) || 1;
+  nx/=dist; ny/=dist;
 
   // separation
-  const overlap = (a.radius + b.radius) - dist;
-  if (overlap > 0) {
-    const totalMass = a.mass + b.mass;
-    const moveA = overlap * (b.mass / totalMass);
-    const moveB = overlap * (a.mass / totalMass);
-
-    a.posX -= nx * moveA;
-    a.posY -= ny * moveA;
-    b.posX += nx * moveB;
-    b.posY += ny * moveB;
+  const overlap=(a.radius+b.radius)-dist;
+  if(overlap>0){
+    const totalMass=a.mass+b.mass;
+    const moveA=overlap*(b.mass/totalMass);
+    const moveB=overlap*(a.mass/totalMass);
+    a.posX-=nx*moveA; a.posY-=ny*moveA;
+    b.posX+=nx*moveB; b.posY+=ny*moveB;
   }
 
   // impulse
-  const rvx = b.dx - a.dx;
-  const rvy = b.dy - a.dy;
-  const velAlongNormal = rvx * nx + rvy * ny;
-  if (velAlongNormal > 0) return;
+  const rvx=b.dx-a.dx, rvy=b.dy-a.dy;
+  const velAlongNormal=rvx*nx + rvy*ny;
+  if(velAlongNormal>0) return;
 
-  const j = -(1 + RESTITUTION) * velAlongNormal / (1 / a.mass + 1 / b.mass);
-  const ix = j * nx;
-  const iy = j * ny;
+  const j=-(1+RESTITUTION)*velAlongNormal / (1/a.mass + 1/b.mass);
+  const ix=j*nx, iy=j*ny;
 
-  a.dx -= ix / a.mass;
-  a.dy -= iy / a.mass;
-  b.dx += ix / b.mass;
-  b.dy += iy / b.mass;
+  a.dx-=ix/a.mass; a.dy-=iy/a.mass;
+  b.dx+=ix/b.mass; b.dy+=iy/b.mass;
 
-  // juice: flash + shake + sound
-  a.flash = COLLISION_FLASH_FRAMES;
-  b.flash = COLLISION_FLASH_FRAMES;
-
-  if (shakeFrames < 6) {
-    shakeFrames = 6;
-  }
   hitSound();
 }
 
+// Goals by difficulty
+function computeGoalMin() {
+  if (difficulty === "easy") return 6;
+  if (difficulty === "hard") return 8;
+  return 7; // normal
+}
+
 // HUD update
-function updateHUD() {
+function updateHUD(){
   const alive = circles.filter(c => !c.dead).length;
 
   lvlEl.textContent = String(level);
   aliveEl.textContent = String(alive);
   totalEl.textContent = String(GROUP_SIZE);
+
+  goalMin = computeGoalMin();
+  goalEl.textContent = `${goalMin}/10`;
 
   killedEl.textContent = String(killedThisLevel);
   escapedEl.textContent = String(escapedThisLevel);
@@ -490,312 +517,324 @@ function updateHUD() {
 
   spdEl.textContent = levelSpeed().toFixed(2);
 
-  // progress bar: (killed+escaped)/10
   const done = killedThisLevel + escapedThisLevel;
   const pct = Math.round((done / GROUP_SIZE) * 100);
   levelBar.style.width = `${pct}%`;
 }
 
 // Create level
-function createLevel() {
-  circles = [];
-  killedThisLevel = 0;
-  escapedThisLevel = 0;
-  levelBar.style.width = "0%";
+function createLevel(){
+  circles=[];
+  killedThisLevel=0;
+  escapedThisLevel=0;
+  levelBar.style.width="0%";
 
-  const spd = levelSpeed();
-  const W = canvas.clientWidth;
-  const H = canvas.clientHeight;
+  const spd = BASE_SPEED + (level - 1) * SPEED_INCREASE;
+  const W=canvas.clientWidth, H=canvas.clientHeight;
 
-  let tries = 0;
-  while (circles.length < GROUP_SIZE && tries < 6000) {
+  let tries=0;
+  while(circles.length < GROUP_SIZE && tries < 6000){
     tries++;
-    const radius = randInt(MIN_RADIUS, MAX_RADIUS);
-    const x = rand(radius, W - radius);
-    const y = H + rand(60, 260);
+    const r=randInt(MIN_RADIUS, MAX_RADIUS);
+    const x=rand(r, W-r);
+    const y=H + rand(60,260);
 
-    let dx = rand(-SIDE_DRIFT, SIDE_DRIFT) * spd;
-    let dy = -rand(0.6, 1.25) * spd;
-    if (Math.abs(dx) < 0.15) dx = dx < 0 ? -0.15 : 0.15;
+    let dx=rand(-SIDE_DRIFT, SIDE_DRIFT) * spd;
+    let dy=-rand(0.6, 1.25) * spd;
+    if(Math.abs(dx)<0.15) dx = dx<0 ? -0.15 : 0.15;
 
-    const c = new Circle(circles.length + 1, x, y, radius, dx, dy, randomColor());
+    const c=new Circle(circles.length+1, x, y, r, dx, dy, randomColor());
 
-    // avoid initial overlap
-    let ok = true;
-    for (const other of circles) {
-      const d = distance(c.posX, c.posY, other.posX, other.posY);
-      if (d < c.radius + other.radius + 10) { ok = false; break; }
+    let ok=true;
+    for(const other of circles){
+      const d=distance(c.posX,c.posY,other.posX,other.posY);
+      if(d < c.radius + other.radius + 10){ ok=false; break; }
     }
-    if (ok) circles.push(c);
+    if(ok) circles.push(c);
   }
 
   updateHUD();
 }
 
-// Final results screen
-function drawFinalResults() {
-  const W = canvas.clientWidth;
-  const H = canvas.clientHeight;
-
+// Final results (simple overlay text on canvas)
+function drawFinalResults(){
+  const W=canvas.clientWidth, H=canvas.clientHeight;
   const totalGame = MAX_LEVELS * GROUP_SIZE;
   const pctKilled = Math.round((totalKilled / totalGame) * 100);
-  const pctEscaped = 100 - pctKilled;
-  const seconds = Math.max(1, Math.round((performance.now() - startTime) / 1000));
+  const seconds = Math.max(1, Math.round((performance.now() - startTime)/1000));
 
-  // dim background
   ctx.save();
-  ctx.fillStyle = "rgba(255,255,255,0.72)";
-  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle="rgba(255,255,255,0.75)";
+  ctx.fillRect(0,0,W,H);
 
-  const cardW = Math.min(720, W * 0.90);
-  const cardH = Math.min(520, H * 0.78);
-  const x = (W - cardW) / 2;
-  const y = (H - cardH) / 2;
+  const cardW=Math.min(760, W*0.92);
+  const cardH=Math.min(520, H*0.80);
+  const x=(W-cardW)/2, y=(H-cardH)/2;
 
-  ctx.fillStyle = "rgba(11,18,32,0.92)";
-  ctx.shadowColor = "rgba(0,0,0,0.35)";
-  ctx.shadowBlur = 20;
-  ctx.fillRect(x, y, cardW, cardH);
+  ctx.fillStyle="rgba(11,18,32,0.92)";
+  ctx.shadowColor="rgba(0,0,0,0.35)";
+  ctx.shadowBlur=20;
+  ctx.fillRect(x,y,cardW,cardH);
 
-  ctx.shadowBlur = 0;
-  ctx.fillStyle = "#fff";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "top";
-  ctx.font = "28px Arial";
-  ctx.fillText("🏁 Resultados finales", W / 2, y + 22);
+  ctx.shadowBlur=0;
+  ctx.fillStyle="#fff";
+  ctx.textAlign="center";
+  ctx.textBaseline="top";
+  ctx.font="28px Arial";
+  ctx.fillText("🏁 Resultados finales", W/2, y+22);
 
-  ctx.font = "18px Arial";
-  ctx.textAlign = "left";
-  const left = x + 28;
-  let yy = y + 80;
-  const line = 28;
+  ctx.textAlign="left";
+  ctx.font="18px Arial";
+  let yy=y+78;
+  const left=x+28;
 
-  ctx.fillStyle = "rgba(255,255,255,0.92)";
-  ctx.fillText(`Niveles: ${MAX_LEVELS}   ·   Tiempo: ${seconds}s   ·   Score: ${score}`, left, yy); yy += line + 8;
+  ctx.fillStyle="rgba(255,255,255,0.90)";
+  ctx.fillText(`Tiempo: ${seconds}s   ·   Score: ${score}`, left, yy); yy+=32;
+  ctx.fillStyle="rgba(255,255,255,0.85)";
+  ctx.fillText(`Eliminados: ${totalKilled} (${pctKilled}%)`, left, yy); yy+=28;
+  ctx.fillText(`Escapados: ${totalEscaped}`, left, yy); yy+=28;
 
-  ctx.fillStyle = "rgba(255,255,255,0.86)";
-  ctx.fillText(`Eliminados: ${totalKilled} (${pctKilled}%)`, left, yy); yy += line;
-  ctx.fillText(`Escapados: ${totalEscaped} (${pctEscaped}%)`, left, yy); yy += line;
+  ctx.fillStyle="rgba(255,255,255,0.92)";
+  yy+=10;
+  ctx.fillText("Detalle por nivel:", left, yy); yy+=28;
 
-  yy += 10;
-  ctx.fillStyle = "rgba(255,255,255,0.92)";
-  ctx.fillText("Detalle por nivel:", left, yy); yy += line;
-
-  ctx.fillStyle = "rgba(255,255,255,0.82)";
-  // dos columnas para que quepan 10 niveles
-  const col2 = left + Math.floor(cardW / 2);
-  let y1 = yy, y2 = yy;
-  for (let i = 0; i < MAX_LEVELS; i++) {
-    const t = `Nivel ${i + 1}: ${perLevelKilled[i]} K / ${perLevelEscaped[i]} E`;
-    if (i < 5) {
-      ctx.fillText(t, left, y1);
-      y1 += 24;
-    } else {
-      ctx.fillText(t, col2, y2);
-      y2 += 24;
-    }
+  ctx.fillStyle="rgba(255,255,255,0.82)";
+  const col2 = left + Math.floor(cardW/2);
+  let y1=yy, y2=yy;
+  for(let i=0;i<MAX_LEVELS;i++){
+    const t=`Nivel ${i+1}: ${perLevelKilled[i]} K / ${perLevelEscaped[i]} E`;
+    if(i<5){ ctx.fillText(t,left,y1); y1+=24; }
+    else { ctx.fillText(t,col2,y2); y2+=24; }
   }
 
-  ctx.textAlign = "center";
-  ctx.fillStyle = "rgba(255,255,255,0.70)";
-  ctx.font = "14px Arial";
-  ctx.fillText("Tip: Presiona R para reiniciar o el botón ↻", W / 2, y + cardH - 28);
+  ctx.textAlign="center";
+  ctx.fillStyle="rgba(255,255,255,0.70)";
+  ctx.font="14px Arial";
+  ctx.fillText("Presiona R para reiniciar o botón ↻", W/2, y+cardH-28);
 
   ctx.restore();
 }
 
 // Input
-canvas.addEventListener("mousemove", (e) => {
-  const rect = canvas.getBoundingClientRect();
-  mouseX = e.clientX - rect.left;
-  mouseY = e.clientY - rect.top;
+canvas.addEventListener("mousemove", (e)=>{
+  const rect=canvas.getBoundingClientRect();
+  mouseX=e.clientX-rect.left;
+  mouseY=e.clientY-rect.top;
 });
 
-canvas.addEventListener("click", (e) => {
-  if (paused || finished) return;
-  const rect = canvas.getBoundingClientRect();
-  const cx = e.clientX - rect.left;
-  const cy = e.clientY - rect.top;
+canvas.addEventListener("click", (e)=>{
+  if(paused || finished) return;
+  const rect=canvas.getBoundingClientRect();
+  const cx=e.clientX-rect.left;
+  const cy=e.clientY-rect.top;
 
-  for (let i = circles.length - 1; i >= 0; i--) {
-    const c = circles[i];
-    if (!c.dead && distance(cx, cy, c.posX, c.posY) <= c.radius) {
+  for(let i=circles.length-1;i>=0;i--){
+    const c=circles[i];
+    if(!c.dead && distance(cx,cy,c.posX,c.posY)<=c.radius){
       c.startFade();
       break;
     }
   }
 });
 
-// Keyboard shortcuts
-window.addEventListener("keydown", (e) => {
-  const k = e.key.toLowerCase();
-  if (k === "p") togglePause();
-  if (k === "m") toggleMute();
-  if (k === "r") restartGame();
+// Keyboard
+window.addEventListener("keydown", (e)=>{
+  const k=e.key.toLowerCase();
+  if(k==="p") togglePause();
+  if(k==="m") toggleMute();
+  if(k==="r") restartGame();
+
+  if(k==="1") activateSlow();
+  if(k==="2") activateFreeze();
+  if(k==="3") activateDouble();
 });
 
 // Buttons
-btnStart.addEventListener("click", () => startGame());
-btnPause.addEventListener("click", () => togglePause());
-btnRestart.addEventListener("click", () => restartGame());
-btnMute.addEventListener("click", () => toggleMute());
+btnStart.addEventListener("click", ()=>startGame());
+btnPause.addEventListener("click", ()=>togglePause());
+btnRestart.addEventListener("click", ()=>restartGame());
+btnMute.addEventListener("click", ()=>toggleMute());
 
-overlayClose.addEventListener("click", () => {
-  startGame();
-});
+overlayClose.addEventListener("click", ()=>startGame());
+volumeSlider.addEventListener("input", ()=>setVolumeFromUI());
+difficultySel.addEventListener("change", ()=>{ difficulty = difficultySel.value; updateHUD(); });
 
-// Controls
-function startGame() {
-  initAudio();
-  // En algunos navegadores hay que “despertar” audio con interacción
-  if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+// Power-up buttons
+puSlow.addEventListener("click", ()=>activateSlow());
+puFreeze.addEventListener("click", ()=>activateFreeze());
+puDouble.addEventListener("click", ()=>activateDouble());
 
-  overlay.classList.remove("show");
-  paused = false;
-  finished = false;
-  btnPause.textContent = "⏸ Pausa";
+function activateSlow(){
+  if(paused || finished) return;
+  slowUntil = performance.now() + SLOW_MS;
+  beep({freq: 330, slideTo: 220, dur: 0.12, type:"sine", gain:0.30});
+}
+function activateFreeze(){
+  if(paused || finished) return;
+  freezeUntil = performance.now() + FREEZE_MS;
+  beep({freq: 180, slideTo: 120, dur: 0.14, type:"triangle", gain:0.28});
+}
+function activateDouble(){
+  if(paused || finished) return;
+  doubleUntil = performance.now() + DOUBLE_MS;
+  beep({freq: 740, slideTo: 990, dur: 0.16, type:"sine", gain:0.26});
 }
 
-function togglePause() {
-  if (finished) return;
+// Controls
+function startGame(){
+  initAudio();
+  if(audioCtx && audioCtx.state==="suspended") audioCtx.resume();
+  setVolumeFromUI();
+
+  difficulty = difficultySel.value;
+  updateHUD();
+
+  overlay.classList.remove("show");
+  paused=false;
+  finished=false;
+  btnPause.textContent="⏸ Pausa";
+
+  // música ON
+  startMusic();
+}
+
+function togglePause(){
+  if(finished) return;
   paused = !paused;
   btnPause.textContent = paused ? "▶ Reanudar" : "⏸ Pausa";
   overlay.classList.toggle("show", paused);
 }
 
-function toggleMute() {
+function toggleMute(){
   initAudio();
   setMuted(!isMuted);
+  if (isMuted) stopMusic();
+  else startMusic();
 }
 
-function restartGame() {
-  level = 1;
-  finished = false;
-  paused = true;
+function restartGame(){
+  level=1;
+  finished=false;
+  paused=true;
 
-  // reset stats
-  circles = [];
-  particles = [];
-  rings = [];
+  circles=[];
+  particles=[];
+  rings=[];
 
-  killedThisLevel = 0;
-  escapedThisLevel = 0;
+  killedThisLevel=0;
+  escapedThisLevel=0;
 
-  totalKilled = 0;
-  totalEscaped = 0;
+  totalKilled=0;
+  totalEscaped=0;
   perLevelKilled = Array(MAX_LEVELS).fill(0);
   perLevelEscaped = Array(MAX_LEVELS).fill(0);
 
-  score = 0;
-  combo = 1;
-  lastKillTime = 0;
+  score=0;
+  combo=1;
+  lastKillTime=0;
+
+  slowUntil=0; freezeUntil=0; doubleUntil=0;
 
   createLevel();
   updateHUD();
 
   overlay.classList.add("show");
-  btnPause.textContent = "⏸ Pausa";
-}
-
-// Screen shake
-function applyShake() {
-  if (shakeFrames > 0) {
-    shakeFrames--;
-    shakeX = rand(-SCREEN_SHAKE_POWER, SCREEN_SHAKE_POWER);
-    shakeY = rand(-SCREEN_SHAKE_POWER, SCREEN_SHAKE_POWER);
-  } else {
-    shakeX = 0;
-    shakeY = 0;
-  }
+  btnPause.textContent="⏸ Pausa";
 }
 
 // Main loop
-function loop() {
+function loop(){
   requestAnimationFrame(loop);
 
-  // background
   drawGrid();
 
-  // particles & rings update
-  for (const p of particles) p.update();
-  particles = particles.filter(p => p.life > 0);
+  // update particles/rings
+  for(const p of particles) p.update();
+  particles = particles.filter(p=>p.life>0);
 
-  for (const r of rings) r.update();
-  rings = rings.filter(r => r.life > 0);
+  for(const r of rings) r.update();
+  rings = rings.filter(r=>r.life>0);
 
-  applyShake();
+  if(finished){
+    // draw last fx
+    for(const r of rings) r.draw();
+    for(const p of particles) p.draw();
+    drawFinalResults();
+    return;
+  }
 
-  // Apply camera shake transform
-  ctx.save();
-  ctx.translate(shakeX, shakeY);
-
-  if (!paused && !finished) {
-    // step circles
-    for (const c of circles) c.step();
+  if(!paused){
+    // step
+    for(const c of circles) c.step();
 
     // collisions + color change
-    for (let i = 0; i < circles.length; i++) {
-      for (let j = i + 1; j < circles.length; j++) {
-        const a = circles[i];
-        const b = circles[j];
-        if (a.dead || b.dead) continue;
-
-        if (circlesCollide(a, b)) {
-          resolveElasticCollision(a, b);
+    for(let i=0;i<circles.length;i++){
+      for(let j=i+1;j<circles.length;j++){
+        const a=circles[i], b=circles[j];
+        if(a.dead || b.dead) continue;
+        if(circlesCollide(a,b)){
+          resolveElasticCollision(a,b);
           a.setColor(randomColor());
           b.setColor(randomColor());
         }
       }
     }
-
-    // draw circles
-    let alive = 0;
-    for (const c of circles) {
-      c.draw();
-      if (!c.dead) alive++;
-    }
-
-    // draw rings & particles above
-    for (const r of rings) r.draw();
-    for (const p of particles) p.draw();
-
-    // level end check
-    if (alive === 0) {
-      // Save level results
-      perLevelKilled[level - 1] = killedThisLevel;
-      perLevelEscaped[level - 1] = escapedThisLevel;
-
-      if (level < MAX_LEVELS) {
-        level++;
-        levelUpSound();
-        createLevel();
-      } else {
-        finished = true;
-        paused = false;
-      }
-    }
-
-    updateHUD();
-  } else {
-    // draw frozen scene (circles)
-    for (const c of circles) c.draw();
-    for (const r of rings) r.draw();
-    for (const p of particles) p.draw();
-
-    if (finished) {
-      drawFinalResults();
-    }
   }
 
-  ctx.restore();
+  // draw circles
+  let alive=0;
+  for(const c of circles){
+    c.draw();
+    if(!c.dead) alive++;
+  }
+
+  // draw fx
+  for(const r of rings) r.draw();
+  for(const p of particles) p.draw();
+
+  // update HUD
+  updateHUD();
+
+  // level complete?
+  if(!paused && alive===0){
+    // Guardar stats del nivel
+    perLevelKilled[level-1] = killedThisLevel;
+    perLevelEscaped[level-1] = escapedThisLevel;
+
+    // Objetivo por nivel: si no cumples, repites el nivel
+    if(killedThisLevel < computeGoalMin()){
+      // repite nivel
+      combo = 1;
+      beep({freq: 200, slideTo: 120, dur: 0.20, type:"square", gain:0.25});
+      createLevel();
+      return;
+    }
+
+    // pasa nivel
+    if(level < MAX_LEVELS){
+      level++;
+      levelUpSound();
+      createLevel();
+    } else {
+      finished = true;
+      stopMusic();
+    }
+  }
 }
 
-// Create first level + show overlay at start
-function init() {
+function computeGoalMin(){
+  if(difficulty==="easy") return 6;
+  if(difficulty==="hard") return 8;
+  return 7;
+}
+
+// Init
+function init(){
+  difficulty = difficultySel.value;
   createLevel();
   updateHUD();
   overlay.classList.add("show");
-  paused = true;
+  paused=true;
   setMuted(false);
 }
 init();

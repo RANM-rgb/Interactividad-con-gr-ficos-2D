@@ -4,20 +4,13 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Bubble Pop Arena · 10 Niveles</title>
-
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"/>
 
   <style>
     :root{
-      --bg:#0b1220;
-      --card: rgba(255,255,255,.08);
-      --stroke: rgba(255,255,255,.12);
-      --text: #eaf2ff;
-      --muted:#aab7d6;
-      --accent:#7dd3fc;
-      --accent2:#c4b5fd;
+      --bg:#0b1220; --card:rgba(255,255,255,.08); --stroke:rgba(255,255,255,.12);
+      --text:#eaf2ff; --muted:#aab7d6; --accent:#7dd3fc; --accent2:#c4b5fd;
     }
-
     body{
       min-height:100vh;
       background:
@@ -26,13 +19,11 @@
         linear-gradient(180deg, #070b14 0%, #0b1220 100%);
       color: var(--text);
     }
-
     .nav-glass{
       background: rgba(7,11,20,.68);
       border-bottom: 1px solid rgba(255,255,255,.10);
       backdrop-filter: blur(10px);
     }
-
     .chip{
       display:flex; gap:.45rem; align-items:center;
       background: rgba(255,255,255,.10);
@@ -45,34 +36,20 @@
     }
     .chip .k{ color: var(--muted); font-size:.82rem; }
     .chip .v{ font-weight:800; letter-spacing:.2px; }
-
     .panel{
       background: var(--card);
       border: 1px solid var(--stroke);
       border-radius: 18px;
       box-shadow: 0 18px 50px rgba(0,0,0,.35);
     }
-
     .canvas-card{
       overflow:hidden;
       border-radius: 18px;
       border: 1px solid rgba(255,255,255,.10);
       box-shadow: 0 18px 55px rgba(0,0,0,.45);
     }
-
-    canvas{
-      display:block;
-      width:100%;
-      height: 650px;
-      background: #fff7c2;
-    }
-
-    .hint{
-      color: var(--muted);
-      font-size:.95rem;
-      line-height: 1.35;
-    }
-
+    canvas{ display:block; width:100%; height: 650px; background:#fff7c2; }
+    .hint{ color: var(--muted); font-size:.95rem; line-height: 1.35; }
     .btn-soft{
       border-radius: 14px;
       border: 1px solid rgba(255,255,255,.16);
@@ -80,7 +57,6 @@
       color: var(--text);
     }
     .btn-soft:hover{ background: rgba(255,255,255,.12); color: var(--text); }
-
     .progress{
       height: 10px;
       border-radius: 999px;
@@ -91,32 +67,23 @@
       border-radius: 999px;
       background: linear-gradient(90deg, rgba(125,211,252,.95), rgba(196,181,253,.95));
     }
-
-    /* Overlay */
     .overlay{
-      position: fixed;
-      inset: 0;
-      display:none;
-      place-items:center;
+      position: fixed; inset: 0;
+      display:none; place-items:center;
       background: rgba(0,0,0,.55);
       backdrop-filter: blur(6px);
-      z-index: 20;
-      padding: 16px;
+      z-index: 20; padding: 16px;
     }
     .overlay.show{ display:grid; }
-
     .overlay-card{
-      width: min(720px, 95vw);
+      width: min(880px, 95vw);
       background: rgba(11,18,32,.86);
       border: 1px solid rgba(255,255,255,.12);
       border-radius: 20px;
       box-shadow: 0 30px 80px rgba(0,0,0,.55);
       padding: 22px;
     }
-    .title{
-      font-weight: 900;
-      letter-spacing: .4px;
-    }
+    .title{ font-weight: 900; letter-spacing: .4px; }
     .kbd{
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       font-size: .9rem;
@@ -127,7 +94,12 @@
       color: #fff;
       display:inline-block;
     }
-
+    .form-select, .form-range{
+      background: rgba(255,255,255,.08);
+      border: 1px solid rgba(255,255,255,.14);
+      color: var(--text);
+    }
+    .form-select option{ color:#0b1220; }
     footer{
       border-top: 1px solid rgba(255,255,255,.10);
       color: rgba(234,242,255,.78);
@@ -161,7 +133,8 @@
         <div class="panel p-3">
           <div class="d-flex flex-wrap gap-2 align-items-center">
             <div class="chip"><span class="k">Nivel</span><span class="v" id="lvl">1</span></div>
-            <div class="chip"><span class="k">Objetos</span><span class="v"><span id="alive">10</span>/<span id="total">10</span></span></div>
+            <div class="chip"><span class="k">Vivos</span><span class="v"><span id="alive">10</span>/<span id="total">10</span></span></div>
+            <div class="chip"><span class="k">Objetivo</span><span class="v" id="goal">7/10</span></div>
             <div class="chip"><span class="k">Eliminados</span><span class="v" id="killed">0</span></div>
             <div class="chip"><span class="k">Escapados</span><span class="v" id="escaped">0</span></div>
             <div class="chip"><span class="k">Combo</span><span class="v" id="combo">x1</span></div>
@@ -169,7 +142,7 @@
             <div class="chip"><span class="k">Vel</span><span class="v" id="spd">1.00</span></div>
 
             <div class="ms-auto d-flex align-items-center gap-2">
-              <span class="small text-white-50">Progreso nivel</span>
+              <span class="small text-white-50">Progreso</span>
               <div class="progress" style="width:min(260px, 55vw);">
                 <div id="levelBar" class="progress-bar" style="width:0%"></div>
               </div>
@@ -177,8 +150,15 @@
           </div>
 
           <div class="mt-2 hint">
-            <b>Hover</b> ilumina · <b>Click</b> POP (fade + partículas) · Colisiones reales (no atraviesan) ·
-            <span class="kbd">P</span> Pausa · <span class="kbd">M</span> Mute · <span class="kbd">R</span> Reiniciar
+            Click POP · Colisiones reales · <span class="kbd">P</span> pausa · <span class="kbd">M</span> mute ·
+            <span class="kbd">R</span> reiniciar · Power-ups: <span class="kbd">1</span> slow, <span class="kbd">2</span> freeze,
+            <span class="kbd">3</span> x2 score
+          </div>
+
+          <div class="mt-3 d-flex flex-wrap gap-2">
+            <button id="puSlow" class="btn btn-sm btn-soft">🕒 Slow Motion (1)</button>
+            <button id="puFreeze" class="btn btn-sm btn-soft">🧊 Freeze (2)</button>
+            <button id="puDouble" class="btn btn-sm btn-soft">✨ x2 Score (3)</button>
           </div>
         </div>
       </div>
@@ -191,30 +171,43 @@
     </div>
   </main>
 
-  <!-- Overlay: Start / Pause / Results -->
+  <!-- Overlay -->
   <div id="overlay" class="overlay show">
     <div class="overlay-card">
       <h2 class="h3 title mb-2">🎮 Bubble Pop Arena</h2>
       <p class="mb-2 text-white-50">
-        10 niveles · 10 burbujas por nivel. Haz click para reventarlas con POP y evita que se escapen.
+        10 niveles · 10 burbujas por nivel. Objetivo por nivel: elimina cierto mínimo para pasar.
       </p>
 
       <div class="row g-2 mb-3">
         <div class="col-12 col-md-6">
           <div class="panel p-3">
-            <div class="fw-semibold mb-1">Controles</div>
+            <div class="fw-semibold mb-2">Opciones (4 extras)</div>
+
+            <label class="form-label mb-1">Dificultad</label>
+            <select id="difficulty" class="form-select mb-2">
+              <option value="easy">Fácil</option>
+              <option value="normal" selected>Normal</option>
+              <option value="hard">Difícil</option>
+            </select>
+
+            <label class="form-label mb-1">Volumen</label>
+            <input id="volume" type="range" class="form-range" min="0" max="100" value="85" />
+            <div class="small text-white-50">Sube esto si quieres más audio.</div>
+          </div>
+        </div>
+
+        <div class="col-12 col-md-6">
+          <div class="panel p-3">
+            <div class="fw-semibold mb-2">Controles</div>
             <div class="text-white-50 small">
               • Mouse: apuntar / hover<br/>
               • Click: eliminar (pop)<br/>
-              • <span class="kbd">P</span> pausa · <span class="kbd">M</span> mute · <span class="kbd">R</span> reiniciar
+              • <span class="kbd">P</span> pausa · <span class="kbd">M</span> mute · <span class="kbd">R</span> reiniciar<br/>
+              • Power-ups: <span class="kbd">1</span>, <span class="kbd">2</span>, <span class="kbd">3</span>
             </div>
-          </div>
-        </div>
-        <div class="col-12 col-md-6">
-          <div class="panel p-3">
-            <div class="fw-semibold mb-1">Tip gamer</div>
-            <div class="text-white-50 small">
-              Haz eliminaciones seguidas rápido para subir el <b>combo</b> y ganar más score.
+            <div class="mt-2 text-white-50 small">
+              Tip: elimina rápido para subir el <b>combo</b> y ganar más score.
             </div>
           </div>
         </div>
@@ -245,7 +238,6 @@
   <script>
     document.getElementById("year").textContent = new Date().getFullYear();
   </script>
-
   <script src="js/main.js"></script>
 </body>
 </html>
